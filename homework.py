@@ -6,7 +6,7 @@ import time
 
 from dotenv import load_dotenv
 from http import HTTPStatus
-from telebot import TeleBot, types
+from telebot import TeleBot
 
 from exceptions import (UnavailableEndpointException,
                         ResponseErrorException,
@@ -134,23 +134,7 @@ def main():
         except ResponseErrorException as error:
             text = f'Сбой в работе программы: {error}'
             send_message(bot, text)
-        except KeyError as error:
-            text = f'Сбой в работе программы: {error}'
-            logging.error(text)
-            send_message(bot, text)
-        except IndexError:
-            text = 'Список домашних заданий пуст!'
-            logging.error(text)
-            send_message(bot, text)
-        except TypeError as error:
-            text = f'Сбой в работе программы: {error}'
-            logging.error(text)
-            send_message(bot, text)
-        except HomeworkStatusException as error:
-            text = f'Сбой в работе программы: {error}'
-            logging.error(text)
-            send_message(bot, text)
-        except requests.RequestException as error:
+        except Exception as error:
             text = f'Сбой в работе программы: {error}'
             logging.error(text)
             send_message(bot, text)
