@@ -1,16 +1,18 @@
 import logging
+import logging.handlers
 import os
-import requests
 import sys
 import time
 
 from dotenv import load_dotenv
 from http import HTTPStatus
+import requests
 from telebot import TeleBot
 
-from exceptions import (UnavailableEndpointException,
-                        ResponseErrorException,
-                        HomeworkStatusException)
+from exceptions import (EmptyAnswerFromAPIException,
+                        HomeworkStatusException,
+                        TokenUnvaibleException,
+                        InvalidResponseCodeException)
 
 load_dotenv()
 
@@ -20,8 +22,16 @@ TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
 TELEGRAM_CHAT_ID = os.getenv('CHAT_ID')
 
 logging.basicConfig(
-    format='%(asctime)s, %(levelname)s, %(message)s,'
+    filename=__file__ + '.log',
+    filemode='a',
+    format='%(asctime)s, %(levelname)s, %(lineno)d, %(message)s,'
 )
+
+logger = logging.getLogger(__name__)
+
+logger.addHandler(logging.FileHandler(__file__ + '.log'))
+
+logger.addHandler(logging.StreamHandler(sys.stdout))
 
 RETRY_PERIOD = 600
 ENDPOINT = 'https://practicum.yandex.ru/api/user_api/homework_statuses/'
@@ -38,9 +48,22 @@ HOMEWORK_VERDICTS = {
 
 def check_tokens():
     """Функция которая проверяет доступность переменных окружения."""
-    if not PRACTICUM_TOKEN or not TELEGRAM_TOKEN:
-        logging.critical('Один из токенов недействителен')
-        sys.exit('Токен Яндекс Практикума недействителен')
+    name_token_tuple = (
+        ('Токен Яндекс Практикума недоступен', PRACTICUM_TOKEN),
+        ('Токен Телеграмма недоступен', TELEGRAM_TOKEN),
+        ('ID чата в телеграмме отсутствует', TELEGRAM_CHAT_ID)
+    )
+    bool_variable = True
+    for text, token in name_token_tuple:
+        if not token:
+            logging.critical(text)
+            bool_variable = False
+    if bool_variable is False:
+        raise TokenUnvaibleException('Один из токенов недействителен')
+
+    # if not PRACTICUM_TOKEN or not TELEGRAM_TOKEN:
+    #     logging.critical('Один из токенов недействителен')
+    #     sys.exit('Токен Яндекс Практикума недействителен')
 
 
 def get_api_answer(timestamp):
@@ -49,15 +72,29 @@ def get_api_answer(timestamp):
 
     timestamp - временной промежуток, за который нужны домашние работы
     """
+    arguments_dict = {
+        'url': ENDPOINT,
+        'headers': HEADERS,
+        'params': timestamp
+    }
     try:
-        response = requests.get(ENDPOINT, headers=HEADERS, params=timestamp)
+        logging.info(f"Совершаю запрос к {arguments_dict['url']} "
+                     f"с аргументами: headers={arguments_dict['headers']}, "
+                     f"params={arguments_dict['params']} "
+                     f"Словарь - {arguments_dict}")
+        response = requests.get(arguments_dict['url'],
+                                headers=arguments_dict['headers'],
+                                params=arguments_dict['params'])
     except requests.RequestException:
-        logging.error('Неизвестная ошибка')
-    if response.status_code == HTTPStatus.OK:
-        return response.json()
-    logging.error(f'Сбой в работе программы: Эндпоинт {ENDPOINT} недоступен. '
-                  'Код ответа API: {response.status_code}')
-    raise UnavailableEndpointException(f'Эндпоинт {ENDPOINT} недоступен.')
+        raise ConnectionError(
+            f'{arguments_dict}, \nошибка соединения с сервером'
+        )
+    if response.status_code != HTTPStatus.OK:
+        raise InvalidResponseCodeException(
+            f'Эндпоинт {arguments_dict["url"]} недоступен. '
+            'Код ответа: {response.status_code}.'
+        )
+    return response.json()
 
 
 def check_response(response):
@@ -67,17 +104,15 @@ def check_response(response):
     параметр response - запрос, который нужно проверить
     """
     if not isinstance(response, dict):
-        raise TypeError
-    if 'homeworks' in response and (
-        'current_date' in response
-    ):
-        if not isinstance(response['homeworks'], list):
-            raise TypeError
-        response['homeworks'][0]
-    else:
-        logging.error('Произошла ошибка: Отсутствие ожидаемых '
-                      'ключей в ответе API')
-        raise ResponseErrorException
+        raise TypeError('Тип данных не соответствует ожидаемым.')
+    if 'homeworks' not in response:
+        raise EmptyAnswerFromAPIException(
+            'Отсутствие ожидаемых ключей в ответе API.'
+        )
+    homeworks = response['homeworks']
+    if not isinstance(homeworks, list):
+        raise TypeError('Тип данных не соответствует ожидаемым.')
+    return homeworks
 
 
 def parse_status(homework: dict):
@@ -86,15 +121,17 @@ def parse_status(homework: dict):
 
     параметр homework - объект домашней работы
     """
-    if 'homework_name' not in homework.keys():
+    if 'homework_name' not in homework:
         raise KeyError
     homework_name = homework['homework_name']
-    if 'status' not in homework.keys() or (
-        homework['status'] not in HOMEWORK_VERDICTS.keys()
-    ):
-        raise HomeworkStatusException
+    if 'status' not in homework:
+        raise HomeworkStatusException('Отсутствует ключ "status".')
+    if homework['status'] not in HOMEWORK_VERDICTS:
+        raise HomeworkStatusException(
+            'Ключ "status" вернул неожиданное значение.'
+        )
     verdict = HOMEWORK_VERDICTS[homework['status']]
-    return f'Изменился статус проверки работы "{homework_name}". {verdict}'
+    return f'Изменился статус проверки работы "{homework_name}". {verdict}' 
 
 
 def send_message(bot, text):
@@ -106,40 +143,41 @@ def send_message(bot, text):
     """
     try:
         bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=text)
-        logging.debug(f'Было отправлено сообщение: {text}')
     except Exception as error:
         logging.error(f'Собщение не отправлено. Ошибка: {error}')
+    logging.debug(f'Было отправлено сообщение: {text}')
 
 
 def main():
     """Основная логика работы бота."""
+    check_tokens()
     bot = TeleBot(token=TELEGRAM_TOKEN)
     timestamp = int(time.time())
-    previous_status = None
+    previous_status = ''
+    last_string = ''
 
     while True:
-        check_tokens()
         try:
             response = get_api_answer(timestamp)
-            check_response(response)
-            if parse_status(response['homeworks'][0]) != previous_status:
-                previous_status = response['homeworks'][0]['status']
-                send_message(bot, HOMEWORK_VERDICTS[previous_status])
+            homeworks = check_response(response)
+            if not homeworks:
+                logging.debug('Список домашних работ пуст')
+                continue
+            current_status = parse_status(homeworks[0])
+            if current_status != previous_status:
+                send_message(bot, current_status)
+                previous_status = current_status
             else:
                 logging.debug('В ответе отсутствуют новые статусы')
 
-        except UnavailableEndpointException as error:
-            text = f'Сбой в работе программы: {error}'
-            send_message(bot, text)
-        except ResponseErrorException as error:
-            text = f'Сбой в работе программы: {error}'
-            send_message(bot, text)
         except Exception as error:
-            text = f'Сбой в работе программы: {error}'
-            logging.error(text)
-            send_message(bot, text)
-        time.sleep(RETRY_PERIOD)
-        bot.polling()
+            current_string = f'Сбой в работе программы: {error}'
+            logging.error(current_string)
+            if current_string != last_string:
+                last_string = current_string
+                send_message(bot, current_string)
+        finally:
+            time.sleep(RETRY_PERIOD)
 
 
 if __name__ == '__main__':
