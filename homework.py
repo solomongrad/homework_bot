@@ -131,7 +131,7 @@ def parse_status(homework: dict):
             'Ключ "status" вернул неожиданное значение.'
         )
     verdict = HOMEWORK_VERDICTS[homework['status']]
-    return f'Изменился статус проверки работы "{homework_name}". {verdict}' 
+    return f'Изменился статус проверки работы "{homework_name}". {verdict}'
 
 
 def send_message(bot, text):
