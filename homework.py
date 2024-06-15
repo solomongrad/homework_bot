@@ -1,3 +1,4 @@
+from http import HTTPStatus
 import logging
 import logging.handlers
 import os
@@ -5,7 +6,6 @@ import sys
 import time
 
 from dotenv import load_dotenv
-from http import HTTPStatus
 import requests
 from telebot import TeleBot
 
@@ -24,7 +24,8 @@ TELEGRAM_CHAT_ID = os.getenv('CHAT_ID')
 logging.basicConfig(
     filename=__file__ + '.log',
     filemode='a',
-    format='%(asctime)s, %(levelname)s, %(lineno)d, %(message)s,'
+    format='%(asctime)s, %(levelname)s, %(lineno)d, %(message)s,',
+    encoding='utf-8'
 )
 
 logger = logging.getLogger(__name__)
@@ -56,14 +57,10 @@ def check_tokens():
     bool_variable = True
     for text, token in name_token_tuple:
         if not token:
-            logging.critical(text)
+            logger.critical(text)
             bool_variable = False
     if bool_variable is False:
         raise TokenUnvaibleException('Один из токенов недействителен')
-
-    # if not PRACTICUM_TOKEN or not TELEGRAM_TOKEN:
-    #     logging.critical('Один из токенов недействителен')
-    #     sys.exit('Токен Яндекс Практикума недействителен')
 
 
 def get_api_answer(timestamp):
@@ -78,21 +75,20 @@ def get_api_answer(timestamp):
         'params': timestamp
     }
     try:
-        logging.info(f"Совершаю запрос к {arguments_dict['url']} "
-                     f"с аргументами: headers={arguments_dict['headers']}, "
-                     f"params={arguments_dict['params']} "
-                     f"Словарь - {arguments_dict}")
+        logger.info('Совершаю запрос к {url} с аргументами: headers={headers},'
+                    ' params={params} '.format(**arguments_dict))
         response = requests.get(arguments_dict['url'],
                                 headers=arguments_dict['headers'],
                                 params=arguments_dict['params'])
     except requests.RequestException:
         raise ConnectionError(
-            f'{arguments_dict}, \nошибка соединения с сервером'
+            'ошибка соединения с сайтом по '
+            'адресу {url}'.format(**arguments_dict)
         )
     if response.status_code != HTTPStatus.OK:
         raise InvalidResponseCodeException(
             f'Эндпоинт {arguments_dict["url"]} недоступен. '
-            'Код ответа: {response.status_code}.'
+            f'Код ответа: {response.status_code}.'
         )
     return response.json()
 
@@ -104,7 +100,9 @@ def check_response(response):
     параметр response - запрос, который нужно проверить
     """
     if not isinstance(response, dict):
-        raise TypeError('Тип данных не соответствует ожидаемым.')
+        raise TypeError('Тип данных не соответствует ожидаемым. \n'
+                        "Ожидался: <class 'dict'> \n"
+                        f'Получили: {type(response)}')
     if 'homeworks' not in response:
         raise EmptyAnswerFromAPIException(
             'Отсутствие ожидаемых ключей в ответе API.'
@@ -126,11 +124,12 @@ def parse_status(homework: dict):
     homework_name = homework['homework_name']
     if 'status' not in homework:
         raise HomeworkStatusException('Отсутствует ключ "status".')
-    if homework['status'] not in HOMEWORK_VERDICTS:
+    status = homework['status']
+    if status not in HOMEWORK_VERDICTS:
         raise HomeworkStatusException(
             'Ключ "status" вернул неожиданное значение.'
         )
-    verdict = HOMEWORK_VERDICTS[homework['status']]
+    verdict = HOMEWORK_VERDICTS[status]
     return f'Изменился статус проверки работы "{homework_name}". {verdict}'
 
 
@@ -144,8 +143,10 @@ def send_message(bot, text):
     try:
         bot.send_message(chat_id=TELEGRAM_CHAT_ID, text=text)
     except Exception as error:
-        logging.error(f'Собщение не отправлено. Ошибка: {error}')
-    logging.debug(f'Было отправлено сообщение: {text}')
+        logger.error(f'Собщение не отправлено. Ошибка: {error}')
+        return False
+    logger.debug(f'Было отправлено сообщение: {text}')
+    return True
 
 
 def main():
@@ -153,29 +154,30 @@ def main():
     check_tokens()
     bot = TeleBot(token=TELEGRAM_TOKEN)
     timestamp = int(time.time())
-    previous_status = ''
-    last_string = ''
+    previous_message = ''
 
     while True:
         try:
             response = get_api_answer(timestamp)
             homeworks = check_response(response)
             if not homeworks:
-                logging.debug('Список домашних работ пуст')
+                logger.debug('Список домашних работ пуст')
                 continue
-            current_status = parse_status(homeworks[0])
-            if current_status != previous_status:
-                send_message(bot, current_status)
-                previous_status = current_status
+            current_message = parse_status(homeworks[0])
+            if current_message != previous_message:
+                if send_message(bot, current_message):
+                    previous_message = current_message
+                    time.sleep(RETRY_PERIOD)
+                    continue
             else:
-                logging.debug('В ответе отсутствуют новые статусы')
+                logger.debug('В ответе отсутствуют новые статусы')
 
         except Exception as error:
-            current_string = f'Сбой в работе программы: {error}'
-            logging.error(current_string)
-            if current_string != last_string:
-                last_string = current_string
-                send_message(bot, current_string)
+            text = f'Сбой в работе программы: {error}'
+            logger.error(text)
+            if current_message != previous_message:
+                if send_message(bot, text):
+                    previous_message = current_message
         finally:
             time.sleep(RETRY_PERIOD)
 
