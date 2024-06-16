@@ -69,26 +69,26 @@ def get_api_answer(timestamp):
 
     timestamp - временной промежуток, за который нужны домашние работы
     """
-    arguments_dict = {
+    request_data = {
         'url': ENDPOINT,
         'headers': HEADERS,
         'params': timestamp
     }
     try:
         logger.info('Совершаю запрос к {url} с аргументами: headers={headers},'
-                    ' params={params} '.format(**arguments_dict))
-        response = requests.get(arguments_dict['url'],
-                                headers=arguments_dict['headers'],
-                                params=arguments_dict['params'])
+                    ' params={params} '.format(**request_data))
+        response = requests.get(**request_data)
     except requests.RequestException:
         raise ConnectionError(
             'ошибка соединения с сайтом по '
-            'адресу {url}'.format(**arguments_dict)
+            'адресу {url}'.format(**request_data)
         )
     if response.status_code != HTTPStatus.OK:
         raise InvalidResponseCodeException(
-            f'Эндпоинт {arguments_dict["url"]} недоступен. '
+            f'Эндпоинт {response.url} недоступен. '
             f'Код ответа: {response.status_code}.'
+            f'Причина: {response.reason}'
+            f'Текст: {response.text}'
         )
     return response.json()
 
@@ -164,20 +164,19 @@ def main():
                 logger.debug('Список домашних работ пуст')
                 continue
             current_message = parse_status(homeworks[0])
-            if current_message != previous_message:
-                if send_message(bot, current_message):
-                    previous_message = current_message
-                    time.sleep(RETRY_PERIOD)
-                    continue
+            if current_message != previous_message and (
+                send_message(bot, current_message)
+            ):
+                previous_message = current_message
+                response.get('current_date')
             else:
                 logger.debug('В ответе отсутствуют новые статусы')
 
         except Exception as error:
             text = f'Сбой в работе программы: {error}'
             logger.error(text)
-            if current_message != previous_message:
-                if send_message(bot, text):
-                    previous_message = current_message
+            if text != previous_message and send_message(bot, text):
+                previous_message = current_message
         finally:
             time.sleep(RETRY_PERIOD)
 
