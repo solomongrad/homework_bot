@@ -168,7 +168,7 @@ def main():
                 send_message(bot, current_message)
             ):
                 previous_message = current_message
-                response.get('current_date')
+                timestamp = response.get('current_date', timestamp)
             else:
                 logger.debug('В ответе отсутствуют новые статусы')
 
